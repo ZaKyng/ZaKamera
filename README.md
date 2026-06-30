@@ -1,3 +1,2 @@
-# ZaKamera2
-
+# ZaKamera
 Photoresistor based light array sensor, teoretically taking photos.
