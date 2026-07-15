@@ -1,16 +1,8 @@
 #include <Arduino.h>
 #include <U8g2lib.h> 
 #include <Wire.h> 
-#include <SPI.h> 
-#include <SD.h> 
-#include "logo.h" 
 U8G2_SH1107_PIMORONI_128X128_2_HW_I2C u8g2(U8G2_R0);
 
-bool running = false;
-int16_t value = 0;
-bool down = true; 
-
-int16_t photo[60][60] = {0}
 
 void setup() {
   u8g2.begin();
