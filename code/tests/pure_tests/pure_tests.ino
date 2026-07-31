@@ -1,57 +1,42 @@
-#include <SPI.h>
-#include <SD.h>
+#include <Arduino.h>
 
-const int chipSelect = 11;
+bool buttons[5] = {false}; //sequence up-right-down-left-any
+bool last_btns[4] = {false};
+uint8_t btn_pins[4] = {9, 8, 7, 10};
 
 void setup() {
-  // Start communication with the computer (Serial Monitor)
   Serial.begin(9600);
-  
-  Serial.print("Starting SD card...");
 
-  // Try to start the SD card module
-  if (!SD.begin(chipSelect)) {
-    Serial.println("SD card failed or not present!");
-    return; // Stop the program here if it fails
-  }
-  Serial.println("SD card connected.");
+  delay(500);
 
-  // --- PART 1: WRITE DATA ---
-  
-  // Open the file 'data.txt'. FILE_WRITE allows us to save new data.
-  File dataFile = SD.open("data.txt", FILE_WRITE);
-
-  if (dataFile) {
-    Serial.println("Writing text to data.txt...");
-    dataFile.println("This message is now saved on the card.");
-    
-    // IMPORTANT: You MUST close the file to save the data.
-    dataFile.close();
-    Serial.println("Writing complete.");
-  } else {
-    Serial.println("ERROR: Could not open data.txt for writing.");
-  }
-
-  // --- PART 2: READ DATA ---
-  
-  Serial.println("--- Reading saved file ---");
-  
-  // Open the same file again, but just for reading
-  File readFile = SD.open("data.txt");
-
-  if (readFile) {
-    // Read the file byte by byte until the end
-    while (readFile.available()) {
-      Serial.write(readFile.read()); // Print the data to the Serial Monitor
-    }
-    // Close the file after you finish reading
-    readFile.close();
-    Serial.println("\n--- Reading complete ---");
-  } else {
-    Serial.println("ERROR: Could not open data.txt for reading.");
+  for(int i = 0; i < 4; i++) {
+    pinMode(btn_pins[i], INPUT_PULLUP);
   }
 }
 
 void loop() {
-  // Nothing to do here, the program runs only once in setup()
+  loopBTNS();
+  for(int i = 0; i < 5; i++) {
+    Serial.print(buttons[i]);
+  }
+  Serial.print("\n");
+  delay(200);
+}
+
+void loopBTNS() {
+  buttons[4] = false;
+  for(int i = 0; i < 4; i++) {
+    if (!digitalRead(btn_pins[i])) {
+      if (!last_btns[i]) {
+        buttons[i] = true;
+        last_btns[i] = true;
+        buttons[4] = true;
+      } else {
+        buttons[i] = false;
+      }
+    } else {
+      last_btns[i] = false;
+      buttons[i] = false;
+    }
+  }
 }
