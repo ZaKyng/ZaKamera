@@ -25,80 +25,49 @@ int8_t selected = 0;
 // Hardware
 const uint8_t sensor_pin = A7;
 const uint8_t servoPins[2] = {4, 3};
-uint8_t angles[2] = {90, 90};
-uint8_t targets[2] = {90, 90};
 Servo servos[2];
 bool movingRight = true;
 
-// SD - Shortened folder name for classic 8.3 FAT format compliance
+// SD Config
 const uint8_t chipSelect = 10;
 bool connectedSD = false;
 const char dirName[] = "ZAKAMER1"; 
-char nextFileName[24] = ""; 
+char nextFileName[32] = ""; 
+uint16_t currentFileIndex = 0;
 
-void formatFileName(char* buffer, int index) {
-  strcpy(buffer, dirName);
-  strcat(buffer, "/");
-  
-  char numStr[4];
-  numStr[0] = '0' + (index / 100) % 10;
-  numStr[1] = '0' + (index / 10) % 10;
-  numStr[2] = '0' + (index % 10);
-  numStr[3] = '\0';
-  
-  strcat(buffer, numStr);
-  strcat(buffer, ".TXT");
+// Simple clean path builder: "ZAKAMER1/IMG000.TXT"
+void formatFileName(char* buffer, uint16_t index) {
+  snprintf(buffer, 32, "%s/IMG%03d.TXT", dirName, index);
 }
 
-void getNextFileName(const char* dirPath, char* outBuffer) {
-  Serial.print(F("[SD] Opening folder: "));
-  Serial.println(dirPath);
-
-  File dir = SD.open(dirPath);
-  if (!dir) {
-    outBuffer[0] = '\0';
-    lastError = ERR_DIR;
-    Serial.println(F("[SD] ERR: Couldn't open folder! Check FAT32 format."));
-    return;
-  }
-
-  int maxIndex = -1;
-  uint16_t safetyCounter = 0;
-
-  while (File entry = dir.openNextFile()) {
-    if (++safetyCounter > 100) { entry.close(); break; }
-    if (!entry.isDirectory()) {
-      int fileIndex = atoi(entry.name());
-      if (fileIndex > maxIndex) maxIndex = fileIndex;
+void getNextFileName() {
+  while (currentFileIndex < 999) {
+    formatFileName(nextFileName, currentFileIndex);
+    if (!SD.exists(nextFileName)) {
+      Serial.print(F("[SD] Target file found: "));
+      Serial.println(nextFileName);
+      return;
     }
-    entry.close();
+    currentFileIndex++;
   }
-  dir.close();
-
-  formatFileName(outBuffer, maxIndex + 1);
-  Serial.print(F("[SD] Target file: "));
-  Serial.println(outBuffer);
 }
 
 void setUpSD() {
   Serial.println(F("[SD] Mounting SD..."));
   
-  // Hardware SPI requirement on Nano: CS / SS Pin MUST be driven high output first
   pinMode(chipSelect, OUTPUT);
   digitalWrite(chipSelect, HIGH);
 
-  if (!SD.begin(chipSelect)) {
+  if (!SD.begin(SPI_QUARTER_SPEED, chipSelect)) {
     connectedSD = false;
     lastError = ERR_NO_SD;
-    Serial.println(F("[SD] FAIL: Card mount error (check wiring/power)."));
+    Serial.println(F("[SD] FAIL: Card mount error."));
     return;
   }
   connectedSD = true;
-  Serial.println(F("[SD] OK: Card mounted."));
 
-  // FAT file systems prefer paths without leading slashes in standard Arduino SD library
   if (!SD.exists(dirName)) {
-    Serial.println(F("[SD] Directory missing. Creating..."));
+    Serial.println(F("[SD] Creating directory..."));
     if (!SD.mkdir(dirName)) {
       connectedSD = false;
       lastError = ERR_DIR;
@@ -107,73 +76,102 @@ void setUpSD() {
     }
   }
 
-  getNextFileName(dirName, nextFileName);
+  getNextFileName();
 }
 
-void moveServo(uint8_t angle, bool xaxis) {
-  targets[xaxis ? 0 : 1] = constrain(angle, 0, 180);
+// Noise-filtering analog sampling (median/trimmed average to remove white noise dots)
+int readCleanSensor() {
+  const uint8_t SAMPLES = 8;
+  int reads[SAMPLES];
+  
+  for (uint8_t i = 0; i < SAMPLES; i++) {
+    reads[i] = analogRead(sensor_pin);
+    delay(35);
+  }
+
+  // Simple bubble sort to find robust median & drop outliers
+  for (uint8_t i = 0; i < SAMPLES - 1; i++) {
+    for (uint8_t j = i + 1; j < SAMPLES; j++) {
+      if (reads[i] > reads[j]) {
+        int temp = reads[i];
+        reads[i] = reads[j];
+        reads[j] = temp;
+      }
+    }
+  }
+
+  // Take average of the middle 4 values (drops highest and lowest noise spikes)
+  int sum = 0;
+  for (uint8_t i = 2; i < 6; i++) {
+    sum += reads[i];
+  }
+  return sum / 4;
 }
 
-void shootAll(const char* photoDir) {
+void shootAll(const char* photoPath) {
   if (!connectedSD) { lastError = ERR_NO_SD; return; }
-  if (photoDir[0] == '\0') { lastError = ERR_PATH; return; }
+  if (photoPath[0] == '\0') { lastError = ERR_PATH; return; }
 
-  File dataFile = SD.open(photoDir, FILE_WRITE);
+  File dataFile = SD.open(photoPath, FILE_WRITE);
   if (!dataFile) { 
     lastError = ERR_FILE; 
-    Serial.println(F("[SHOOT] FAIL: Cannot create target file."));
+    Serial.println(F("[SHOOT] FAIL: Cannot open file."));
     return; 
   }
+
+  // Attach servos prior to scanning
+  servos[0].attach(servoPins[0]);
+  servos[1].attach(servoPins[1]);
+
+  // Move smoothly to home position prior to starting
+  servos[0].write(0);
+  servos[1].write(0);
+  delay(300);
+
+  // Draw visual feedback on display during scan
+  u8g2.firstPage();
+  do {
+    u8g2.setCursor(20, 60);
+    u8g2.print(F("Scanning..."));
+  } while (u8g2.nextPage());
+
 
   dataFile.print('[');
   movingRight = true;
 
-  for (uint8_t x = 0; x < 30; x++) {
+  for (uint8_t y = 0; y < 30; y++) {
     dataFile.print('[');
-    servos[1].write(x * 6);
-    delay(40);
+    servos[1].write(y * 6);
+    delay(50); // Settling time after pan movement
 
-    for (uint8_t y = 0; y < 30; y++) {
-      servos[0].write(movingRight ? (y * 6) : ((29 - y) * 6));
-      delay(100);
+    for (uint8_t x = 0; x < 31; x++) {
+      uint8_t targetX = movingRight ? (x * 6) : ((30 - x) * 6);
+      servos[0].write(targetX);
+      delay(140); // Settling time after tilt movement
 
-      int temp = 0;
-      for (uint8_t s = 0; s < 4; s++) {
-        temp += analogRead(sensor_pin);
-        delay(60);
-      }
-      dataFile.print(temp / 4);
-      if (y != 29) dataFile.print(F(", "));
+      int cleanValue = readCleanSensor();
+      
+      dataFile.print(cleanValue);
+      if (x != 30) dataFile.print(F(", "));
     }
     movingRight = !movingRight;
     dataFile.print(']');
-    if (x != 29) dataFile.print(F(", "));
+    if (y != 29) dataFile.print(F(", "));
     dataFile.flush();
   }
   dataFile.print(']');
   dataFile.close();
 
+  // Silence servos to end mechanical whine & electronic noise
+  servos[0].write(90);
+  servos[1].write(90);
+  delay(150);
+  servos[0].detach();
+  servos[1].detach();
+
   lastError = STATUS_OK;
-  moveServo(90, true);
-  delay(30);
-  moveServo(90, false);
-}
-
-void setUpServos() {
-  for (uint8_t i = 0; i < 2; i++) {
-    servos[i].attach(servoPins[i]);
-    servos[i].write(90);
-  }
-}
-
-void loopServos() {
-  for (uint8_t i = 0; i < 2; i++) {
-    if (targets[i] != angles[i]) {
-      angles[i] += (targets[i] > angles[i]) ? min((uint8_t)(targets[i] - angles[i]), (uint8_t)3)
-                                            : -min((uint8_t)(angles[i] - targets[i]), (uint8_t)3);
-      servos[i].write(angles[i]);
-    }
-  }
+  currentFileIndex++;
+  getNextFileName();
 }
 
 void loopBTNS() {
@@ -189,7 +187,6 @@ void loopBTNS() {
 void setup() {
   Serial.begin(9600);
   delay(400);
-  Serial.println(F("\n--- SYSTEM BOOT ---"));
 
   pinMode(sensor_pin, INPUT);
   for (uint8_t i = 0; i < 4; i++) pinMode(btn_pins[i], INPUT_PULLUP);
@@ -198,10 +195,19 @@ void setup() {
   u8g2.setContrast(255);
   u8g2.setFont(u8g2_font_helvR08_tr);
 
-  setUpServos();
   setUpSD();
 
-  Serial.println(F("--- READY ---"));
+  // Attach servos prior to scanning
+  servos[0].attach(servoPins[0]);
+  servos[1].attach(servoPins[1]);
+
+  // Move smoothly to home position prior to starting
+  servos[0].write(90);
+  servos[1].write(90);
+
+  delay(150);
+  servos[0].detach();
+  servos[1].detach(); 
 }
 
 void displayError() {
@@ -218,16 +224,12 @@ void displayError() {
 
 void loop() {
   loopBTNS();
-  loopServos();
 
   if (currentState == HOME) {
     if (buttons[1]) {
       if (selected == 0) currentState = SHOOT;
       else if (selected == 1) {
         currentState = CALIB;
-        moveServo(90, true);
-        delay(30);
-        moveServo(90, false);
         delay_time = 150;
       }
     }
@@ -247,9 +249,7 @@ void loop() {
 
   } else if (currentState == SHOOT) {
     if (connectedSD) {
-      for (uint8_t i = 0; i < 60; i++) { loopServos(); delay(20); }
       shootAll(nextFileName);
-      if (connectedSD) getNextFileName(dirName, nextFileName);
     } else {
       lastError = ERR_NO_SD;
     }

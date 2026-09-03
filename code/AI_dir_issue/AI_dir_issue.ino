@@ -30,84 +30,53 @@ uint8_t targets[2] = {90, 90};
 Servo servos[2];
 bool movingRight = true;
 
-// SD - Shortened folder name for classic 8.3 FAT format compliance
+// SD Card Configuration
 const uint8_t chipSelect = 10;
 bool connectedSD = false;
-const char dirName[] = "ZAKAMER1"; 
-char nextFileName[24] = ""; 
+char nextFileName[13] = "IMG000.TXT"; 
+uint16_t fileIndex = 0;
 
-void formatFileName(char* buffer, int index) {
-  strcpy(buffer, dirName);
-  strcat(buffer, "/");
-  
-  char numStr[4];
-  numStr[0] = '0' + (index / 100) % 10;
-  numStr[1] = '0' + (index / 10) % 10;
-  numStr[2] = '0' + (index % 10);
-  numStr[3] = '\0';
-  
-  strcat(buffer, numStr);
-  strcat(buffer, ".TXT");
-}
+// Generates lightweight 8.3 FAT root filenames: IMG000.TXT, IMG001.TXT...
+void getNextFileName(char* outBuffer) {
+  while (fileIndex < 999) {
+    outBuffer[0] = 'I';
+    outBuffer[1] = 'M';
+    outBuffer[2] = 'G';
+    outBuffer[3] = '0' + (fileIndex / 100) % 10;
+    outBuffer[4] = '0' + (fileIndex / 10) % 10;
+    outBuffer[5] = '0' + (fileIndex % 10);
+    outBuffer[6] = '.';
+    outBuffer[7] = 'T';
+    outBuffer[8] = 'X';
+    outBuffer[9] = 'T';
+    outBuffer[10] = '\0';
 
-void getNextFileName(const char* dirPath, char* outBuffer) {
-  Serial.print(F("[SD] Opening folder: "));
-  Serial.println(dirPath);
-
-  File dir = SD.open(dirPath);
-  if (!dir) {
-    outBuffer[0] = '\0';
-    lastError = ERR_DIR;
-    Serial.println(F("[SD] ERR: Couldn't open folder! Check FAT32 format."));
-    return;
-  }
-
-  int maxIndex = -1;
-  uint16_t safetyCounter = 0;
-
-  while (File entry = dir.openNextFile()) {
-    if (++safetyCounter > 100) { entry.close(); break; }
-    if (!entry.isDirectory()) {
-      int fileIndex = atoi(entry.name());
-      if (fileIndex > maxIndex) maxIndex = fileIndex;
+    if (!SD.exists(outBuffer)) {
+      Serial.print(F("[SD] Target file found: "));
+      Serial.println(outBuffer);
+      return;
     }
-    entry.close();
+    fileIndex++;
   }
-  dir.close();
-
-  formatFileName(outBuffer, maxIndex + 1);
-  Serial.print(F("[SD] Target file: "));
-  Serial.println(outBuffer);
 }
 
 void setUpSD() {
-  Serial.println(F("[SD] Mounting SD..."));
+  Serial.println(F("[SD] Mounting Card..."));
   
-  // Hardware SPI requirement on Nano: CS / SS Pin MUST be driven high output first
   pinMode(chipSelect, OUTPUT);
   digitalWrite(chipSelect, HIGH);
 
-  if (!SD.begin(chipSelect)) {
+  // Use quarter speed to maintain SPI stability on breadboards/jumper wires
+  if (!SD.begin(SPI_QUARTER_SPEED, chipSelect)) {
     connectedSD = false;
     lastError = ERR_NO_SD;
-    Serial.println(F("[SD] FAIL: Card mount error (check wiring/power)."));
+    Serial.println(F("[SD] FAIL: SD Card Mount Error"));
     return;
   }
+  
   connectedSD = true;
-  Serial.println(F("[SD] OK: Card mounted."));
-
-  // FAT file systems prefer paths without leading slashes in standard Arduino SD library
-  if (!SD.exists(dirName)) {
-    Serial.println(F("[SD] Directory missing. Creating..."));
-    if (!SD.mkdir(dirName)) {
-      connectedSD = false;
-      lastError = ERR_DIR;
-      Serial.println(F("[SD] FAIL: Mkdir failed."));
-      return;
-    }
-  }
-
-  getNextFileName(dirName, nextFileName);
+  Serial.println(F("[SD] OK: Card Mounted"));
+  getNextFileName(nextFileName);
 }
 
 void moveServo(uint8_t angle, bool xaxis) {
@@ -121,7 +90,7 @@ void shootAll(const char* photoDir) {
   File dataFile = SD.open(photoDir, FILE_WRITE);
   if (!dataFile) { 
     lastError = ERR_FILE; 
-    Serial.println(F("[SHOOT] FAIL: Cannot create target file."));
+    Serial.println(F("[SHOOT] FAIL: Cannot open file."));
     return; 
   }
 
@@ -154,6 +123,7 @@ void shootAll(const char* photoDir) {
   dataFile.close();
 
   lastError = STATUS_OK;
+  fileIndex++; // Increment for next scan
   moveServo(90, true);
   delay(30);
   moveServo(90, false);
@@ -201,7 +171,7 @@ void setup() {
   setUpServos();
   setUpSD();
 
-  Serial.println(F("--- READY ---"));
+  Serial.println(F("--- SYSTEM READY ---"));
 }
 
 void displayError() {
@@ -249,7 +219,7 @@ void loop() {
     if (connectedSD) {
       for (uint8_t i = 0; i < 60; i++) { loopServos(); delay(20); }
       shootAll(nextFileName);
-      if (connectedSD) getNextFileName(dirName, nextFileName);
+      if (connectedSD) getNextFileName(nextFileName);
     } else {
       lastError = ERR_NO_SD;
     }
