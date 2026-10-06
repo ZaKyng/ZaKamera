@@ -35,9 +35,9 @@ const char dirName[] = "ZAKAMER1";
 char nextFileName[32] = ""; 
 uint16_t currentFileIndex = 0;
 
-// Simple clean path builder: "ZAKAMER1/IMG000.TXT"
+// Simple clean path builder: "ZAKAMER1/IMG000.ZKP"
 void formatFileName(char* buffer, uint16_t index) {
-  snprintf(buffer, 32, "%s/IMG%03d.TXT", dirName, index);
+  snprintf(buffer, 32, "%s/IMG%03d.ZKP", dirName, index);
 }
 
 void getNextFileName() {
