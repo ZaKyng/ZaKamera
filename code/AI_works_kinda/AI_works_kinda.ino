@@ -86,7 +86,7 @@ int readCleanSensor() {
   
   for (uint8_t i = 0; i < SAMPLES; i++) {
     reads[i] = analogRead(sensor_pin);
-    delay(35);
+    delay(50);
   }
 
   // Simple bubble sort to find robust median & drop outliers
@@ -147,7 +147,7 @@ void shootAll(const char* photoPath) {
     for (uint8_t x = 0; x < 31; x++) {
       uint8_t targetX = movingRight ? (x * 6) : ((30 - x) * 6);
       servos[0].write(targetX);
-      delay(140); // Settling time after tilt movement
+      delay(200); // Settling time after tilt movement
 
       int cleanValue = readCleanSensor();
       
